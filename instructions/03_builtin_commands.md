@@ -104,7 +104,7 @@ wsh> e
 ### Handling Errors
 
 - If the user provides an incorrect format for the alias command, print the
-  error message `Incorrect usage of unalias. Correct format: unalias name\n`.
+  error message `Incorrect usage of alias. Correct format: alias name = 'command'\n`.
   - Examples of incorrect usage:
     - `alias ll 'ls -l'` (missing `=`)
     - `alias ll = ls -l` (missing single quotes around command with spaces)
@@ -250,14 +250,14 @@ can be obtained from the `HOME` environment variable.
 
 ```shell
 wsh> pwd
-/home/user
+/root # you run as root in the docker container by default
 wsh> cd /tmp
 wsh> pwd # an executable (if you have the which builtin, try `which pwd`)
 /tmp
 wsh> cd hello # assuming /tmp/hello exists
 wsh> pwd
 /tmp/hello
-wsh> cd h1 # assuming /tmp/hello/h1 does not exists
+wsh> cd h1 # assuming /tmp/hello/h1 does not exist
 cd: No such file or directory
 wsh> pwd # should still be /tmp/hello
 /tmp/hello
@@ -273,9 +273,7 @@ wsh> pwd
   `Incorrect usage of cd. Correct format: cd | cd directory\n`.
 - If the home environment variable is not set when the user types `cd` with
   no arguments, print the error message `cd: HOME not set\n`.
-- If the specified directory does not exist or is not a directory, print the
-  error message `cd: No such file or directory\n`. This can be done with
-  `perror("cd")` to include the system error message.
+- If the specified directory does not exist or is not a directory, print the error message using `perror("cd")`. This will include the system error message. (e.g., `cd: No such file or directory`).
 
 --------------------------------------------------------------------------------
 
