@@ -245,17 +245,17 @@ void execute_line(char *line) {
                 if (argc > 1) {
                     wsh_warn(INVALID_EXIT_USE);
                     free_argv(argc, argv);
-                    free(line_copy);
-                    // printf("######################WE ARE NOT EXITING########################\n");
-                    if (batch_file != NULL) { 
-                      fclose(batch_file);
-                      batch_file = NULL;
-                    }
+                    free(line_copy);                    
                     return; 
                 } else {
                     free_argv(argc, argv);
                     free(line_copy);
+                    if (batch_file != NULL) {
+                        fclose(batch_file);
+                        batch_file = NULL;
+                    }
                     clean_exit(rc);
+
                 }
             }
             else if (!handle_builtin(argc, argv)) {
