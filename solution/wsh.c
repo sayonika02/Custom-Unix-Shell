@@ -98,8 +98,6 @@ int main(int argc, char **argv)
  * @Brief Interactive mode: print prompt and wait for user input
  * execute the given input and repeat
  */
-// Replace BOTH of your main loop functions with these
-
 void interactive_main(void)
 {
   char line[MAX_LINE];
@@ -118,14 +116,9 @@ void interactive_main(void)
     while (*p && isspace(*p)) p++;
     if (*p == '\0') continue;
     
-    char temp_line[MAX_LINE];
-    strcpy(temp_line, line);
-    char *first_word = strtok(temp_line, " \t");
-    if (first_word && strcmp(first_word, "history") != 0) {
-        da_put(history, line);
-    }
-    
     execute_line(line);
+    da_put(history, line);
+    
   }
   clean_exit(rc);
 }
@@ -146,14 +139,8 @@ int batch_main(const char *script_file)
     while (*p && isspace(*p)) p++;
     if (*p == '\0') continue;
     
-    char temp_line[MAX_LINE];
-    strcpy(temp_line, line);
-    char *first_word = strtok(temp_line, " \t");
-    if (first_word && strcmp(first_word, "history") != 0) {
-        da_put(history, line);
-    }
-    
     execute_line(line);
+    da_put(history, line);
   }
 
   fclose(batch_file); 
@@ -381,6 +368,8 @@ int handle_builtin(int argc, char **argv) {
             for (int i = 4; i < argc; i++) {
                 value = append(value, " ");
                 value = append(value, argv[i]);
+                //throw error message even when quotes are not being used for when there's multiple words in the command
+                wsh_warn(INVALID_ALIAS_USE);
             }
             hm_put(alias_hm, argv[1], value); 
             free(value);
