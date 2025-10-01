@@ -235,7 +235,6 @@ void execute_line(char *line) {
         }
     }
 
-    //LOGIC PATH 1 - SINGLE COMMAND
     if (num_segments == 1) {
         int argc;
         char *argv[MAX_ARGS];
@@ -245,6 +244,14 @@ void execute_line(char *line) {
             if (strcmp(argv[0], "exit") == 0) {
                 if (argc > 1) {
                     wsh_warn(INVALID_EXIT_USE);
+                    free_argv(argc, argv);
+                    free(line_copy);
+                    // printf("######################WE ARE NOT EXITING########################\n");
+                    if (batch_file != NULL) { 
+                      fclose(batch_file);
+                      batch_file = NULL;
+                    }
+                    return; 
                 } else {
                     free_argv(argc, argv);
                     free(line_copy);
@@ -267,29 +274,42 @@ void execute_line(char *line) {
         return;
     }
 
-    //LOGIC PATH 2 - A PIPELINE (2+ COMMANDS)
+    // --- LOGIC PATH 2: A PIPELINE (2+ COMMANDS) ---
     int validation_passed = 1;
     for (int i = 0; i < num_segments; i++) {
         int argc;
         char* argv[MAX_ARGS];
         parseline_no_subst(pipe_segments[i], argv, &argc);
         if (argc > 0) {
+            char *command_to_check = argv[0];
+            char *expanded_alias = NULL;
+            char *alias_value = hm_get(alias_hm, command_to_check);
+            if (alias_value) {
+                // It's an alias. Get the first word of the *expanded* command.
+                expanded_alias = strdup(alias_value);
+                char *space = strchr(expanded_alias, ' ');
+                if (space) *space = '\0';
+                command_to_check = expanded_alias;
+            }
+
             const char* builtins[] = {"exit", "cd", "path", "alias", "unalias", "which", "history", NULL};
             int is_builtin = 0;
             for (int j = 0; builtins[j]; j++) {
-                if (strcmp(argv[0], builtins[j]) == 0) {
+                if (strcmp(command_to_check, builtins[j]) == 0) {
                     is_builtin = 1;
                     break;
                 }
             }
+            
             if (!is_builtin) {
-                char* exec_path = find_executable(argv[0]);
+                char* exec_path = find_executable(command_to_check);
                 if (!exec_path) {
                     wsh_warn(CMD_NOT_FOUND, argv[0]);
                     validation_passed = 0;
                 }
                 free(exec_path);
             }
+            free(expanded_alias);
         }
         free_argv(argc, argv);
     }
@@ -310,11 +330,11 @@ void execute_line(char *line) {
         }
         pids[i] = fork();
         if (pids[i] == -1) { perror("fork"); break; }
-        if (pids[i] == 0) { // Child
+        if (pids[i] == 0) { 
             if (prev_pipe_fd != -1) { dup2(prev_pipe_fd, STDIN_FILENO); close(prev_pipe_fd); }
             if (i < num_segments - 1) { close(pipe_fds[0]); dup2(pipe_fds[1], STDOUT_FILENO); close(pipe_fds[1]); }
             execute_single_command(pipe_segments[i]);
-        } else { // Parent
+        } else { 
             if (prev_pipe_fd != -1) { close(prev_pipe_fd); }
             if (i < num_segments - 1) { close(pipe_fds[1]); prev_pipe_fd = pipe_fds[0]; }
         }
@@ -365,6 +385,23 @@ int handle_builtin(int argc, char **argv) {
             rc = EXIT_SUCCESS;
             return 1;
         } 
+        //add code for handling case name=value
+        // if (argc == 2) {
+        //     char* arg_copy = strdup(argv[1]);
+        //     char* eq_ptr = strchr(arg_copy, '=');
+        //     // Check that '=' exists and that there is a name before it
+        //     if (eq_ptr != NULL && eq_ptr != arg_copy) {
+        //         *eq_ptr = '\0'; // Split the string into name and value
+        //         hm_put(alias_hm, arg_copy, eq_ptr + 1);
+        //         rc = EXIT_SUCCESS;
+        //     } else {
+        //         wsh_warn(INVALID_ALIAS_USE);
+        //         free(arg_copy);
+        //         return 1;
+        //     }
+        //     free(arg_copy);
+        //     return 1;
+        // }
         else if (argc >= 3 && strcmp(argv[2], "=") == 0) {
             char* value = (argc > 3) ? strdup(argv[3]) : strdup("");
             for (int i = 4; i < argc; i++) {
@@ -439,6 +476,10 @@ int handle_builtin(int argc, char **argv) {
         return 1;
     }
     if (strcmp(argv[0], "exit") == 0) {
+        if (batch_file != NULL) {
+            fclose(batch_file);
+            batch_file = NULL;
+        }
         exit(rc);
     }
     return 0;
