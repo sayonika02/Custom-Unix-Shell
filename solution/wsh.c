@@ -18,7 +18,6 @@ HashMap *alias_hm = NULL;
 DynamicArray *history = NULL;
 FILE *batch_file = NULL;
 
-// Forward declarations
 void execute_line(char *line);
 int handle_builtin(int argc, char **argv);
 char* find_executable(const char *cmd);
@@ -109,10 +108,8 @@ void interactive_main(void)
     fflush(stdout);
 
     if (fgets(line, MAX_LINE, stdin) == NULL) {
-      if (ferror(stdin)) {
-        perror("fgets");
-      }
-      break; // EOF
+      if (ferror(stdin)) { perror("fgets"); }
+      break; 
     }
     
     line[strcspn(line, "\n")] = 0;
@@ -121,7 +118,13 @@ void interactive_main(void)
     while (*p && isspace(*p)) p++;
     if (*p == '\0') continue;
     
-    da_put(history, line);
+    char temp_line[MAX_LINE];
+    strcpy(temp_line, line);
+    char *first_word = strtok(temp_line, " \t");
+    if (first_word && strcmp(first_word, "history") != 0) {
+        da_put(history, line);
+    }
+    
     execute_line(line);
   }
   clean_exit(rc);
@@ -143,7 +146,13 @@ int batch_main(const char *script_file)
     while (*p && isspace(*p)) p++;
     if (*p == '\0') continue;
     
-    da_put(history, line);
+    char temp_line[MAX_LINE];
+    strcpy(temp_line, line);
+    char *first_word = strtok(temp_line, " \t");
+    if (first_word && strcmp(first_word, "history") != 0) {
+        da_put(history, line);
+    }
+    
     execute_line(line);
   }
 
@@ -154,46 +163,53 @@ int batch_main(const char *script_file)
 void execute_single_command(char *command_str) {
     if (batch_file != NULL) {
         fclose(batch_file);
+        batch_file = NULL;
     }
     rc = EXIT_SUCCESS;
   
     int argc = 0;
     char *argv[MAX_ARGS];
-
-    char *trimmed_cmd = strdup(command_str);
-    char *first_word_end = strchr(trimmed_cmd, ' ');
-    if (first_word_end) *first_word_end = '\0';
     
-    char* alias_val = hm_get(alias_hm, trimmed_cmd);
+    char *first_word = strdup(command_str);
+    char *space_ptr = strchr(first_word, ' ');
+    if (space_ptr) *space_ptr = '\0';
+    
+    char* alias_val = hm_get(alias_hm, first_word);
     char* final_cmd = NULL;
 
     if (alias_val) {
         final_cmd = strdup(alias_val);
-        if (first_word_end) {
-            final_cmd = append(final_cmd, first_word_end + 1);
+        if (space_ptr) {
+            final_cmd = append(final_cmd, " ");
+            final_cmd = append(final_cmd, space_ptr + 1);
         }
     } else {
         final_cmd = strdup(command_str);
     }
-    free(trimmed_cmd);
+    free(first_word);
 
     parseline_no_subst(final_cmd, argv, &argc);
     free(final_cmd);
     
     if (argc == 0) {
-        clean_exit(rc);
+        exit(EXIT_SUCCESS);
     }
     
     if (handle_builtin(argc, argv)) {
         free_argv(argc, argv);
-        clean_exit(rc);
+        exit(rc);
     }
     
     char* exec_path = find_executable(argv[0]);
     if (!exec_path) {
-        wsh_warn(CMD_NOT_FOUND, argv[0]);
+        char* path_env = getenv("PATH");
+        if (!path_env || strlen(path_env) == 0) {
+            wsh_warn(EMPTY_PATH);
+        } else {
+            wsh_warn(CMD_NOT_FOUND, argv[0]);
+        }
         free_argv(argc, argv);
-        clean_exit(EXIT_FAILURE);
+        exit(EXIT_FAILURE);
     }
 
     execv(exec_path, argv);
@@ -201,7 +217,7 @@ void execute_single_command(char *command_str) {
     perror("execv");
     free(exec_path);
     free_argv(argc, argv);
-    clean_exit(EXIT_FAILURE);
+    exit(EXIT_FAILURE);
 }
 
 void execute_line(char *line) {
@@ -231,28 +247,67 @@ void execute_line(char *line) {
         }
     }
 
+    //LOGIC PATH 1 - SINGLE COMMAND
     if (num_segments == 1) {
         int argc;
         char *argv[MAX_ARGS];
         parseline_no_subst(pipe_segments[0], argv, &argc);
 
         if (argc > 0) {
-            if (!handle_builtin(argc, argv)) {
-                pid_t pid = fork();
-                if (pid == -1) {
-                    perror("fork");
-                } else if (pid == 0) { 
-                    execute_single_command(pipe_segments[0]);
+            if (strcmp(argv[0], "exit") == 0) {
+                if (argc > 1) {
+                    wsh_warn(INVALID_EXIT_USE);
                 } else {
+                    free_argv(argc, argv);
+                    free(line_copy);
+                    clean_exit(rc);
+                }
+            }
+            else if (!handle_builtin(argc, argv)) {
+                pid_t pid = fork();
+                if (pid == -1) { perror("fork"); } 
+                else if (pid == 0) { execute_single_command(pipe_segments[0]); }
+                else {
                     int status;
                     waitpid(pid, &status, 0);
-                    if (WIFEXITED(status)) {
-                        rc = WEXITSTATUS(status);
-                    }
+                    if (WIFEXITED(status)) { rc = WEXITSTATUS(status); }
                 }
             }
         }
         free_argv(argc, argv);
+        free(line_copy);
+        return;
+    }
+
+    //LOGIC PATH 2 - A PIPELINE (2+ COMMANDS)
+    int validation_passed = 1;
+    for (int i = 0; i < num_segments; i++) {
+        int argc;
+        char* argv[MAX_ARGS];
+        parseline_no_subst(pipe_segments[i], argv, &argc);
+        if (argc > 0) {
+            const char* builtins[] = {"exit", "cd", "path", "alias", "unalias", "which", "history", NULL};
+            int is_builtin = 0;
+            for (int j = 0; builtins[j]; j++) {
+                if (strcmp(argv[0], builtins[j]) == 0) {
+                    is_builtin = 1;
+                    break;
+                }
+            }
+            if (!is_builtin) {
+                char* exec_path = find_executable(argv[0]);
+                if (!exec_path) {
+                    wsh_warn(CMD_NOT_FOUND, argv[0]);
+                    validation_passed = 0;
+                }
+                free(exec_path);
+            }
+        }
+        free_argv(argc, argv);
+    }
+
+    if (!validation_passed) {
+        rc = EXIT_FAILURE;
         free(line_copy);
         return;
     }
@@ -265,29 +320,15 @@ void execute_line(char *line) {
         if (i < num_segments - 1) {
             if (pipe(pipe_fds) == -1) { perror("pipe"); free(line_copy); return; }
         }
-
         pids[i] = fork();
         if (pids[i] == -1) { perror("fork"); break; }
-
-        if (pids[i] == 0) { 
-            if (prev_pipe_fd != -1) {
-                dup2(prev_pipe_fd, STDIN_FILENO);
-                close(prev_pipe_fd);
-            }
-            if (i < num_segments - 1) {
-                close(pipe_fds[0]);
-                dup2(pipe_fds[1], STDOUT_FILENO);
-                close(pipe_fds[1]);
-            }
+        if (pids[i] == 0) { // Child
+            if (prev_pipe_fd != -1) { dup2(prev_pipe_fd, STDIN_FILENO); close(prev_pipe_fd); }
+            if (i < num_segments - 1) { close(pipe_fds[0]); dup2(pipe_fds[1], STDOUT_FILENO); close(pipe_fds[1]); }
             execute_single_command(pipe_segments[i]);
-        } else { 
-            if (prev_pipe_fd != -1) {
-                close(prev_pipe_fd);
-            }
-            if (i < num_segments - 1) {
-                close(pipe_fds[1]);
-                prev_pipe_fd = pipe_fds[0];
-            }
+        } else { // Parent
+            if (prev_pipe_fd != -1) { close(prev_pipe_fd); }
+            if (i < num_segments - 1) { close(pipe_fds[1]); prev_pipe_fd = pipe_fds[0]; }
         }
     }
     
@@ -303,14 +344,7 @@ void execute_line(char *line) {
 }
 
 int handle_builtin(int argc, char **argv) {
-    if (strcmp(argv[0], "exit") == 0) {
-        if (argc > 1) { 
-            wsh_warn(INVALID_EXIT_USE); 
-            return 1;
-        }
-        clean_exit(rc);
-    }
-    else if (strcmp(argv[0], "cd") == 0) {
+    if (strcmp(argv[0], "cd") == 0) {
         if (argc > 2) { wsh_warn(INVALID_CD_USE); return 1; }
         char *dir;
         if (argc == 1) {
@@ -328,6 +362,7 @@ int handle_builtin(int argc, char **argv) {
         if (argc == 1) {
             char* path = getenv("PATH");
             if (path) printf("%s\n", path);
+            fflush(stdout);
         } else {
             setenv("PATH", argv[1], 1);
         }
@@ -337,9 +372,12 @@ int handle_builtin(int argc, char **argv) {
     else if (strcmp(argv[0], "alias") == 0) {
         if (argc == 1) { 
             hm_print_sorted(alias_hm); 
+            fflush(stdout);
             rc = EXIT_SUCCESS;
-        } else if (argc >= 4 && strcmp(argv[2], "=") == 0) {
-            char* value = strdup(argv[3]);
+            return 1;
+        } 
+        else if (argc >= 3 && strcmp(argv[2], "=") == 0) {
+            char* value = (argc > 3) ? strdup(argv[3]) : strdup("");
             for (int i = 4; i < argc; i++) {
                 value = append(value, " ");
                 value = append(value, argv[i]);
@@ -365,6 +403,7 @@ int handle_builtin(int argc, char **argv) {
         char* alias_val = hm_get(alias_hm, cmd);
         if (alias_val) { 
             printf(WHICH_ALIAS, cmd, alias_val); 
+            fflush(stdout);
             rc = EXIT_SUCCESS;
             return 1; 
         }
@@ -372,17 +411,19 @@ int handle_builtin(int argc, char **argv) {
         for (int i = 0; builtins[i]; i++) {
             if (strcmp(cmd, builtins[i]) == 0) {
                 printf(WHICH_BUILTIN, cmd);
+                fflush(stdout);
                 rc = EXIT_SUCCESS;
                 return 1;
             }
         }
         char* exec_path = find_executable(cmd);
         if (exec_path) {
-            printf("%s\n", exec_path); 
+            printf(WHICH_EXTERNAL, cmd, exec_path); 
             free(exec_path);
         } else {
             printf(WHICH_NOT_FOUND, cmd);
         }
+        fflush(stdout);
         rc = EXIT_SUCCESS;
         return 1;
     }
@@ -402,24 +443,26 @@ int handle_builtin(int argc, char **argv) {
                 printf("%s\n", da_get(history, n - 1));
             }
         }
+        fflush(stdout);
         rc = EXIT_SUCCESS;
         return 1;
+    }
+    if (strcmp(argv[0], "exit") == 0) {
+        exit(rc);
     }
     return 0;
 }
 
 char* find_executable(const char *cmd) {
-    if (strchr(cmd, '/') != NULL) { 
+    if (!cmd || strlen(cmd) == 0) return NULL;
+
+    if (strchr(cmd, '/') != NULL) {
         if (access(cmd, X_OK) == 0) return strdup(cmd);
         return NULL;
     }
     
     char *path_env = getenv("PATH");
     if (!path_env || strlen(path_env) == 0) {
-        // Only warn if the command is not a built-in. This is a subtle point
-        // but prevents "PATH empty" messages for built-ins. We can't check
-        // for built-ins here easily, so the warning is acceptable as is.
-        wsh_warn(EMPTY_PATH);
         return NULL;
     }
     
@@ -444,11 +487,11 @@ char* find_executable(const char *cmd) {
 }
 
 void free_argv(int argc, char **argv) {
+    if (!argv) return;
     for (int i = 0; i < argc; i++) {
-        free(argv[i]);
+        if (argv[i]) { free(argv[i]); argv[i] = NULL; }
     }
 }
-
 
 /**
  * @Brief Parse a command line into arguments without doing
