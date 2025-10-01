@@ -110,13 +110,14 @@ void interactive_main(void)
       break; 
     }
     
-    line[strcspn(line, "\n")] = 0;
+    line[strcspn(line, "\n")] = 0; //Clean the input line by removing the trailing newline
 
+    //skip empty or whitespace
     char* p = line;
     while (*p && isspace(*p)) p++;
     if (*p == '\0') continue;
     
-    execute_line(line);
+    execute_line(line); //first execute the command and then add it to history
     da_put(history, line);
     
   }
@@ -139,7 +140,7 @@ int batch_main(const char *script_file)
     while (*p && isspace(*p)) p++;
     if (*p == '\0') continue;
     
-    execute_line(line);
+    execute_line(line); //first execute the command and then add it to history
     da_put(history, line);
   }
 
@@ -157,7 +158,7 @@ void execute_single_command(char *command_str) {
     int argc = 0;
     char *argv[MAX_ARGS];
     
-    char *first_word = strdup(command_str);
+    char *first_word = strdup(command_str); //perform alias substitution for the first token of the command.
     char *space_ptr = strchr(first_word, ' ');
     if (space_ptr) *space_ptr = '\0';
     
@@ -330,6 +331,7 @@ void execute_line(char *line) {
     }
 }
 
+//should only be called for single commands in the parent process
 int handle_builtin(int argc, char **argv) {
     if (strcmp(argv[0], "cd") == 0) {
         if (argc > 2) { wsh_warn(INVALID_CD_USE); return 1; }
